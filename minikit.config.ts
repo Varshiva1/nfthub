@@ -15,9 +15,9 @@ export const minikitConfig = {
   },
   miniapp: {
     version: "1",
-    name: "Cubey", 
-    subtitle: "Your AI Ad Companion", 
-    description: "Ads",
+    name: "nft viewer", 
+    subtitle: "check your nfts ", 
+    description: "utility",
     screenshotUrls: [`${ROOT_URL}/screenshot-portrait.png`],
     iconUrl: `${ROOT_URL}/blue-icon.png`,
     splashImageUrl: `${ROOT_URL}/blue-hero.png`,
@@ -32,5 +32,8 @@ export const minikitConfig = {
     ogDescription: "",
     ogImageUrl: `${ROOT_URL}/blue-hero.png`,
   },
+  "baseBuilder": {
+    "ownerAddress": "0x192a5cbBfb6Ab58dCf4Fe28FB11ADE240c4c8aFa"
+  }
 } as const;
 
