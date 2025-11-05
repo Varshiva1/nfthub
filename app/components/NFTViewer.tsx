@@ -38,24 +38,28 @@ interface AlchemyContractMetadata {
     collectionName?: string;
     imageUrl?: string;
     description?: string;
-    floorPrice?: number; // <- Alchemy's OpenSea metadata field
+    floorPrice?: number; // OpenSea metadata field (when available)
   };
 }
 
+/** Type-safe metadata: can be a string (JSON) or an object with common image fields */
+type AlchemyMetadataObject = {
+  image?: string;
+  image_url?: string;
+  imageUrl?: string;
+  [key: string]: unknown;
+};
+type AlchemyMetadata = string | AlchemyMetadataObject | null | undefined;
+
 interface AlchemyNFT {
   contract: AlchemyContract;
-  id: {
-    tokenId: string;
-  };
+  id: { tokenId: string };
   balance?: string;
   title?: string;
   description?: string;
-  tokenUri?: {
-    gateway?: string;
-    raw?: string;
-  };
+  tokenUri?: { gateway?: string; raw?: string };
   media?: AlchemyMedia[];
-  metadata?: any;
+  metadata?: AlchemyMetadata; // <- removed any
   timeLastUpdated?: string;
   contractMetadata?: AlchemyContractMetadata;
   spamInfo?: {
@@ -81,7 +85,6 @@ const NFTViewer = () => {
 
   React.useEffect(() => {
     setMounted(true);
-
     const initSDK = async () => {
       if (typeof window !== 'undefined') {
         try {
@@ -91,7 +94,6 @@ const NFTViewer = () => {
         }
       }
     };
-
     initSDK();
   }, []);
 
@@ -101,26 +103,26 @@ const NFTViewer = () => {
     { name: 'Polygon', alchemyNetwork: 'polygon-mainnet', color: '#8247E5' },
     { name: 'Optimism', alchemyNetwork: 'opt-mainnet', color: '#FF0420' },
     { name: 'Arbitrum', alchemyNetwork: 'arb-mainnet', color: '#28A0F0' },
-    // { name: 'Avalanche', alchemyNetwork: 'avalanche-mainnet', color: '#E84142' },
-    // { name: 'BNB Chain', alchemyNetwork: 'bnb-mainnet', color: '#F3BA2F' },
     { name: 'Linea', alchemyNetwork: 'linea-mainnet', color: '#00A1FF' },
-    // { name: 'Mantle', alchemyNetwork: 'mantle-mainnet', color: '#FF8200' },
     { name: 'ZkSync', alchemyNetwork: 'zksync-mainnet', color: '#2855FF' },
   ] as const;
 
   const getNativeUnit = (chain: string) => {
-    switch(chain) {
+    switch (chain) {
       case 'Polygon': return 'MATIC';
-    //   case 'Avalanche': return 'AVAX';
-    //   case 'BNB Chain': return 'BNB';
-      case 'Linea': return 'LINEA';
-    //   case 'Mantle': return 'MNT'; 
+      case 'Linea': return 'ETH'; // Linea is ETH-based
       case 'ZkSync': return 'ETH';
-    
       default: return 'ETH';
     }
   };
-  
+
+  const extractImageFromMetadataObject = (obj: AlchemyMetadataObject | undefined): string => {
+    if (!obj) return '';
+    if (typeof obj.image === 'string' && obj.image) return obj.image;
+    if (typeof obj.image_url === 'string' && obj.image_url) return obj.image_url;
+    if (typeof obj.imageUrl === 'string' && obj.imageUrl) return obj.imageUrl;
+    return '';
+  };
 
   const extractImageUrl = (nft: AlchemyNFT): string => {
     // Priority 1: Media gateway
@@ -141,21 +143,20 @@ const NFTViewer = () => {
       return nft.tokenUri.gateway;
     }
 
-    // Priority 4: Try to parse metadata if it's a string
+    // Priority 4: Parse metadata if it's a string (JSON)
     if (typeof nft.metadata === 'string') {
       try {
-        const parsed = JSON.parse(nft.metadata);
-        if (parsed.image) return parsed.image;
+        const parsed = JSON.parse(nft.metadata) as AlchemyMetadataObject;
+        const fromParsed = extractImageFromMetadataObject(parsed);
+        if (fromParsed) return fromParsed;
       } catch {
-        
+        /* ignore non-JSON strings */
       }
     }
 
     // Priority 5: Metadata object
     if (nft.metadata && typeof nft.metadata === 'object') {
-      if (nft.metadata.image) return nft.metadata.image;
-      if (nft.metadata.image_url) return nft.metadata.image_url;
-      if (nft.metadata.imageUrl) return nft.metadata.imageUrl;
+      return extractImageFromMetadataObject(nft.metadata as AlchemyMetadataObject);
     }
 
     return '';
@@ -167,12 +168,12 @@ const NFTViewer = () => {
   ) => {
     try {
       const apiKey = process.env.NEXT_PUBLIC_ALCHEMY_API_KEY;
-
       if (!apiKey) {
         console.warn('Alchemy API key not set');
         return [];
       }
 
+      // free-plan friendly (no excludeFilters[]=SPAM)
       const url = `https://${chain.alchemyNetwork}.g.alchemy.com/v2/${apiKey}/getNFTs?owner=${walletAddress}&withMetadata=true`;
 
       const response = await fetch(url, {
@@ -188,41 +189,35 @@ const NFTViewer = () => {
 
       return data.ownedNfts
         .filter((nft) => {
-          const isSpam =
-            nft.spamInfo?.isSpam === true ||
-            nft.spamInfo?.isSpam === 'true';
+          // best-effort spam guard
+          const isSpam = nft.spamInfo?.isSpam === true || nft.spamInfo?.isSpam === 'true';
           return !isSpam;
         })
         .map((nft: AlchemyNFT) => {
-          // Extract collection name
           const collectionName =
             nft.contractMetadata?.name ||
             nft.contractMetadata?.openSea?.collectionName ||
             nft.contract.name ||
             'Unknown Collection';
 
-          // Extract NFT name
           const tokenIdHex = nft.id.tokenId;
           const tokenIdDecimal = parseInt(tokenIdHex, 16);
+
           const nftName =
             nft.title ||
             nft.contractMetadata?.name ||
-            `${collectionName} #${tokenIdDecimal}`;
+            `${collectionName} #${Number.isFinite(tokenIdDecimal) ? tokenIdDecimal : tokenIdHex}`;
 
-          // Extract description
           const nftDescription =
             nft.description ||
             nft.contractMetadata?.openSea?.description ||
             'No description available';
 
-          // Extract image URL
           const imageUrl = extractImageUrl(nft);
-
-          // Extract floor price (OpenSea metadata if present)
           const floorPrice = nft.contractMetadata?.openSea?.floorPrice ?? null;
 
           return {
-            tokenId: tokenIdDecimal.toString(),
+            tokenId: Number.isFinite(tokenIdDecimal) ? String(tokenIdDecimal) : tokenIdHex,
             name: nftName,
             description: nftDescription,
             imageUrl,
@@ -232,7 +227,7 @@ const NFTViewer = () => {
             floorPrice,
           } as NFT;
         })
-        .filter((nft) => nft.imageUrl); // Only include NFTs with images
+        .filter((nft) => Boolean(nft.imageUrl));
     } catch (err) {
       console.error(`Error fetching from ${chain.name}:`, err);
       return [];
@@ -245,7 +240,7 @@ const NFTViewer = () => {
       return;
     }
 
-    if (!address.match(/^0x[a-fA-F0-9]{40}$/)) {
+    if (!/^0x[a-fA-F0-9]{40}$/.test(address)) {
       setError('Invalid Ethereum address format');
       return;
     }
@@ -255,10 +250,7 @@ const NFTViewer = () => {
     setNfts([]);
 
     try {
-      const allNFTPromises = CHAINS.map((chain) =>
-        fetchNFTsFromAlchemy(address, chain)
-      );
-
+      const allNFTPromises = CHAINS.map((chain) => fetchNFTsFromAlchemy(address, chain));
       const results = await Promise.all(allNFTPromises);
       const allNFTs = results.flat();
 
@@ -275,9 +267,7 @@ const NFTViewer = () => {
     }
   };
 
-  const truncateAddress = (addr: string) => {
-    return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
-  };
+  const truncateAddress = (addr: string) => `${addr.slice(0, 6)}...${addr.slice(-4)}`;
 
   const getChainColor = (chain: string) => {
     const chainData = CHAINS.find((c) => c.name === chain);
@@ -285,7 +275,7 @@ const NFTViewer = () => {
   };
 
   const getExplorerUrl = (chain: string, contract: string, tokenId: string) => {
-    const explorers: { [key: string]: string } = {
+    const explorers: Record<string, string> = {
       Ethereum: `https://etherscan.io/nft/${contract}/${tokenId}`,
       Base: `https://basescan.org/nft/${contract}/${tokenId}`,
       Polygon: `https://polygonscan.com/nft/${contract}/${tokenId}`,
@@ -311,8 +301,8 @@ const NFTViewer = () => {
           <div className={styles.iconContainer}>
             <ImageIcon style={{ width: '2rem', height: '2rem', color: 'white' }} />
           </div>
-          <h1 className={styles.title}>NFT Capsule Viewer</h1>
-          <p className={styles.subtitle}>Discover NFTs across Ethereum, Base, Polygon, Optimism & Arbitrum</p>
+          <h1 className={styles.title}>NFT Viewer</h1>
+          <p className={styles.subtitle}>Discover NFTs across Ethereum, Base, Polygon, Arbitrum & Others </p>
         </div>
 
         {/* Search Bar */}
@@ -329,11 +319,7 @@ const NFTViewer = () => {
                 className={styles.input}
               />
             </div>
-            <button
-              onClick={handleSearch}
-              disabled={loading}
-              className={styles.searchButton}
-            >
+            <button onClick={handleSearch} disabled={loading} className={styles.searchButton}>
               {loading ? (
                 <>
                   <Loader2 style={{ width: '1.25rem', height: '1.25rem', animation: 'spin 1s linear infinite' }} />
@@ -348,11 +334,7 @@ const NFTViewer = () => {
             </button>
           </div>
 
-          {error && (
-            <div className={styles.errorBox}>
-              {error}
-            </div>
-          )}
+          {error && <div className={styles.errorBox}>{error}</div>}
         </div>
 
         {/* Chain Badges */}
@@ -364,10 +346,7 @@ const NFTViewer = () => {
                 <div
                   key={chain.name}
                   className={styles.chainBadge}
-                  style={{
-                    background: chain.color + '15',
-                    color: chain.color,
-                  }}
+                  style={{ background: chain.color + '15', color: chain.color }}
                 >
                   <div className={styles.chainDot} style={{ background: chain.color }} />
                   {chain.name}
@@ -377,32 +356,24 @@ const NFTViewer = () => {
           </div>
         )}
 
-        {}
+        {/* Results Bar */}
         {nfts.length > 0 && (
           <div className={styles.resultsBar}>
             <p className={styles.resultsText}>
-              Found {nfts.length} NFTs across {new Set(nfts.map(n => n.chain)).size} chains
+              Found {nfts.length} NFTs across {new Set(nfts.map((n) => n.chain)).size} chains
             </p>
             <div className={styles.viewModeToggle}>
               <button
                 onClick={() => setViewMode('grid')}
                 className={`${styles.viewModeButton} ${viewMode === 'grid' ? styles.active : ''}`}
               >
-                <Grid3x3 style={{
-                  width: '1.25rem',
-                  height: '1.25rem',
-                  color: viewMode === 'grid' ? '#667eea' : 'white',
-                }} />
+                <Grid3x3 style={{ width: '1.25rem', height: '1.25rem', color: viewMode === 'grid' ? '#667eea' : 'white' }} />
               </button>
               <button
                 onClick={() => setViewMode('list')}
                 className={`${styles.viewModeButton} ${viewMode === 'list' ? styles.active : ''}`}
               >
-                <List style={{
-                  width: '1.25rem',
-                  height: '1.25rem',
-                  color: viewMode === 'list' ? '#667eea' : 'white',
-                }} />
+                <List style={{ width: '1.25rem', height: '1.25rem', color: viewMode === 'list' ? '#667eea' : 'white' }} />
               </button>
             </div>
           </div>
@@ -452,10 +423,7 @@ const NFTViewer = () => {
                 <div className={styles.nftInfo}>
                   <div
                     className={styles.nftChainBadge}
-                    style={{
-                      background: getChainColor(nft.chain) + '20',
-                      color: getChainColor(nft.chain),
-                    }}
+                    style={{ background: getChainColor(nft.chain) + '20', color: getChainColor(nft.chain) }}
                   >
                     {nft.chain}
                   </div>
@@ -468,9 +436,7 @@ const NFTViewer = () => {
                     </p>
                   )}
 
-                  <p className={styles.nftContract}>
-                    {truncateAddress(nft.contractAddress)}
-                  </p>
+                  <p className={styles.nftContract}>{truncateAddress(nft.contractAddress)}</p>
                 </div>
               </div>
             ))}
@@ -488,18 +454,9 @@ const NFTViewer = () => {
 
         {/* Modal for NFT Details */}
         {selectedNFT && (
-          <div
-            onClick={() => setSelectedNFT(null)}
-            className={styles.modalOverlay}
-          >
-            <div
-              onClick={(e) => e.stopPropagation()}
-              className={styles.modalContent}
-            >
-              <button
-                onClick={() => setSelectedNFT(null)}
-                className={styles.modalClose}
-              >
+          <div onClick={() => setSelectedNFT(null)} className={styles.modalOverlay}>
+            <div onClick={(e) => e.stopPropagation()} className={styles.modalContent}>
+              <button onClick={() => setSelectedNFT(null)} className={styles.modalClose}>
                 <X style={{ width: '1.5rem', height: '1.5rem', color: 'white' }} />
               </button>
 
