@@ -296,6 +296,18 @@
     white-space: nowrap;
   }
   
+  /* NEW: Floor price line */
+  .nftFloorPrice {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: #10b981; /* emerald-500 */
+    margin: 0 0 0.5rem 0;
+  }
+  
+  .nftFloorPrice span {
+    font-family: monospace;
+  }
+  
   .nftContract {
     font-size: 0.75rem;
     color: #9CA3AF;
@@ -497,12 +509,13 @@
     .nftGrid {
       grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
     }
-    
+  
     .title {
       font-size: 2rem;
     }
-    
+  
     .modalTitle {
       font-size: 1.5rem;
     }
   }
+  

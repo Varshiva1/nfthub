@@ -14,6 +14,7 @@ interface NFT {
   contractAddress: string;
   chain: string;
   collectionName: string;
+  floorPrice?: number | null;
 }
 
 interface AlchemyMedia {
@@ -37,6 +38,7 @@ interface AlchemyContractMetadata {
     collectionName?: string;
     imageUrl?: string;
     description?: string;
+    floorPrice?: number; // <- Alchemy's OpenSea metadata field
   };
 }
 
@@ -57,7 +59,7 @@ interface AlchemyNFT {
   timeLastUpdated?: string;
   contractMetadata?: AlchemyContractMetadata;
   spamInfo?: {
-    isSpam?: string;
+    isSpam?: string | boolean;
     classifications?: string[];
   };
 }
@@ -79,7 +81,7 @@ const NFTViewer = () => {
 
   React.useEffect(() => {
     setMounted(true);
-    
+
     const initSDK = async () => {
       if (typeof window !== 'undefined') {
         try {
@@ -89,7 +91,7 @@ const NFTViewer = () => {
         }
       }
     };
-    
+
     initSDK();
   }, []);
 
@@ -99,7 +101,26 @@ const NFTViewer = () => {
     { name: 'Polygon', alchemyNetwork: 'polygon-mainnet', color: '#8247E5' },
     { name: 'Optimism', alchemyNetwork: 'opt-mainnet', color: '#FF0420' },
     { name: 'Arbitrum', alchemyNetwork: 'arb-mainnet', color: '#28A0F0' },
-  ];
+    // { name: 'Avalanche', alchemyNetwork: 'avalanche-mainnet', color: '#E84142' },
+    // { name: 'BNB Chain', alchemyNetwork: 'bnb-mainnet', color: '#F3BA2F' },
+    { name: 'Linea', alchemyNetwork: 'linea-mainnet', color: '#00A1FF' },
+    // { name: 'Mantle', alchemyNetwork: 'mantle-mainnet', color: '#FF8200' },
+    { name: 'ZkSync', alchemyNetwork: 'zksync-mainnet', color: '#2855FF' },
+  ] as const;
+
+  const getNativeUnit = (chain: string) => {
+    switch(chain) {
+      case 'Polygon': return 'MATIC';
+    //   case 'Avalanche': return 'AVAX';
+    //   case 'BNB Chain': return 'BNB';
+      case 'Linea': return 'LINEA';
+    //   case 'Mantle': return 'MNT'; 
+      case 'ZkSync': return 'ETH';
+    
+      default: return 'ETH';
+    }
+  };
+  
 
   const extractImageUrl = (nft: AlchemyNFT): string => {
     // Priority 1: Media gateway
@@ -125,8 +146,8 @@ const NFTViewer = () => {
       try {
         const parsed = JSON.parse(nft.metadata);
         if (parsed.image) return parsed.image;
-      } catch (e) {
-        // Not JSON, skip
+      } catch {
+        
       }
     }
 
@@ -140,57 +161,56 @@ const NFTViewer = () => {
     return '';
   };
 
-  const fetchNFTsFromAlchemy = async (walletAddress: string, chain: typeof CHAINS[0]) => {
+  const fetchNFTsFromAlchemy = async (
+    walletAddress: string,
+    chain: typeof CHAINS[number]
+  ) => {
     try {
       const apiKey = process.env.NEXT_PUBLIC_ALCHEMY_API_KEY;
-      
+
       if (!apiKey) {
         console.warn('Alchemy API key not set');
         return [];
       }
 
-      const response = await fetch(
-        `https://${chain.alchemyNetwork}.g.alchemy.com/v2/${apiKey}/getNFTs?owner=${walletAddress}&withMetadata=true`,
-        {
-          method: 'GET',
-          headers: {
-            'Accept': 'application/json',
-          }
-        }
-      );
+      const url = `https://${chain.alchemyNetwork}.g.alchemy.com/v2/${apiKey}/getNFTs?owner=${walletAddress}&withMetadata=true`;
+
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+      });
 
       if (!response.ok) {
         throw new Error(`Failed to fetch from ${chain.name}`);
       }
 
       const data: AlchemyResponse = await response.json();
-      
-      console.log(`${chain.name} NFTs:`, data.ownedNfts.length);
-      
+
       return data.ownedNfts
-        .filter(nft => {
-          // Filter out spam
-          const isSpam = nft.spamInfo?.isSpam === 'true' 
+        .filter((nft) => {
+          const isSpam =
+            nft.spamInfo?.isSpam === true ||
+            nft.spamInfo?.isSpam === 'true';
           return !isSpam;
         })
         .map((nft: AlchemyNFT) => {
           // Extract collection name
-          const collectionName = 
+          const collectionName =
             nft.contractMetadata?.name ||
             nft.contractMetadata?.openSea?.collectionName ||
             nft.contract.name ||
             'Unknown Collection';
 
           // Extract NFT name
-          const tokenId = nft.id.tokenId;
-          const tokenIdDecimal = parseInt(tokenId, 16);
-          const nftName = 
+          const tokenIdHex = nft.id.tokenId;
+          const tokenIdDecimal = parseInt(tokenIdHex, 16);
+          const nftName =
             nft.title ||
             nft.contractMetadata?.name ||
             `${collectionName} #${tokenIdDecimal}`;
 
           // Extract description
-          const nftDescription = 
+          const nftDescription =
             nft.description ||
             nft.contractMetadata?.openSea?.description ||
             'No description available';
@@ -198,17 +218,21 @@ const NFTViewer = () => {
           // Extract image URL
           const imageUrl = extractImageUrl(nft);
 
+          // Extract floor price (OpenSea metadata if present)
+          const floorPrice = nft.contractMetadata?.openSea?.floorPrice ?? null;
+
           return {
             tokenId: tokenIdDecimal.toString(),
             name: nftName,
             description: nftDescription,
-            imageUrl: imageUrl,
+            imageUrl,
             contractAddress: nft.contract.address,
             chain: chain.name,
-            collectionName: collectionName,
-          };
+            collectionName,
+            floorPrice,
+          } as NFT;
         })
-        .filter(nft => nft.imageUrl); // Only include NFTs with images
+        .filter((nft) => nft.imageUrl); // Only include NFTs with images
     } catch (err) {
       console.error(`Error fetching from ${chain.name}:`, err);
       return [];
@@ -231,14 +255,12 @@ const NFTViewer = () => {
     setNfts([]);
 
     try {
-      const allNFTPromises = CHAINS.map(chain => 
+      const allNFTPromises = CHAINS.map((chain) =>
         fetchNFTsFromAlchemy(address, chain)
       );
 
       const results = await Promise.all(allNFTPromises);
       const allNFTs = results.flat();
-
-      console.log('Total NFTs found:', allNFTs.length);
 
       if (allNFTs.length === 0) {
         setError('No NFTs found for this address across any chain');
@@ -258,17 +280,17 @@ const NFTViewer = () => {
   };
 
   const getChainColor = (chain: string) => {
-    const chainData = CHAINS.find(c => c.name === chain);
+    const chainData = CHAINS.find((c) => c.name === chain);
     return chainData?.color || '#6B7280';
   };
 
   const getExplorerUrl = (chain: string, contract: string, tokenId: string) => {
     const explorers: { [key: string]: string } = {
-      'Ethereum': `https://etherscan.io/nft/${contract}/${tokenId}`,
-      'Base': `https://basescan.org/nft/${contract}/${tokenId}`,
-      'Polygon': `https://polygonscan.com/nft/${contract}/${tokenId}`,
-      'Optimism': `https://optimistic.etherscan.io/nft/${contract}/${tokenId}`,
-      'Arbitrum': `https://arbiscan.io/nft/${contract}/${tokenId}`,
+      Ethereum: `https://etherscan.io/nft/${contract}/${tokenId}`,
+      Base: `https://basescan.org/nft/${contract}/${tokenId}`,
+      Polygon: `https://polygonscan.com/nft/${contract}/${tokenId}`,
+      Optimism: `https://optimistic.etherscan.io/nft/${contract}/${tokenId}`,
+      Arbitrum: `https://arbiscan.io/nft/${contract}/${tokenId}`,
     };
     return explorers[chain] || '#';
   };
@@ -303,7 +325,7 @@ const NFTViewer = () => {
                 placeholder="Enter wallet address (0x...)"
                 value={address}
                 onChange={(e) => setAddress(e.target.value)}
-                onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
+                onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
                 className={styles.input}
               />
             </div>
@@ -355,7 +377,7 @@ const NFTViewer = () => {
           </div>
         )}
 
-        {/* Results Bar */}
+        {}
         {nfts.length > 0 && (
           <div className={styles.resultsBar}>
             <p className={styles.resultsText}>
@@ -439,6 +461,13 @@ const NFTViewer = () => {
                   </div>
                   <h3 className={styles.nftName}>{nft.name}</h3>
                   <p className={styles.nftCollection}>{nft.collectionName}</p>
+
+                  {typeof nft.floorPrice === 'number' && nft.floorPrice > 0 && (
+                    <p className={styles.nftFloorPrice}>
+                      Floor: <span>{nft.floorPrice.toFixed(2)} {getNativeUnit(nft.chain)}</span>
+                    </p>
+                  )}
+
                   <p className={styles.nftContract}>
                     {truncateAddress(nft.contractAddress)}
                   </p>
@@ -503,6 +532,15 @@ const NFTViewer = () => {
                 <h2 className={styles.modalTitle}>{selectedNFT.name}</h2>
                 <p className={styles.modalCollection}>{selectedNFT.collectionName}</p>
                 <p className={styles.modalDescription}>{selectedNFT.description}</p>
+
+                {typeof selectedNFT.floorPrice === 'number' && selectedNFT.floorPrice > 0 && (
+                  <div className={styles.modalInfoBox}>
+                    <p className={styles.modalInfoLabel}>Floor Price</p>
+                    <p className={styles.modalInfoValue}>
+                      {selectedNFT.floorPrice.toFixed(2)} {getNativeUnit(selectedNFT.chain)}
+                    </p>
+                  </div>
+                )}
 
                 <div className={styles.modalInfoBox}>
                   <p className={styles.modalInfoLabel}>Contract Address</p>
